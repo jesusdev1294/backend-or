@@ -16,10 +16,12 @@ import { QueuesModule } from './queues/queues.module';
     }),
     MongooseModule.forRoot(process.env.MONGODB_URI || 'mongodb://localhost:27017/orquestador'),
     BullModule.forRoot({
-      redis: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT) || 6379,
-      },
+      redis: process.env.REDIS_URL 
+        ? process.env.REDIS_URL // Railway format
+        : {
+            host: process.env.REDIS_HOST || 'localhost',
+            port: parseInt(process.env.REDIS_PORT) || 6379,
+          },
     }),
     LogsModule,
     FalabellaModule,
