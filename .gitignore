@@ -28,8 +28,7 @@ coverage/
 *.lcov
 .nyc_output/
 
-# Logs
-logs/
+# Logs (solo archivos de log, no la carpeta src/logs)
 *.log
 
 # Ngrok
