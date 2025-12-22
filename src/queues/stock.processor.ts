@@ -81,10 +81,10 @@ export class StockProcessor {
     try {
       if (marketplace === 'falabella') {
         // Actualizar stock en Falabella
-        await this.falabellaService.updateStock({
+        await this.falabellaService.updateStock([{
           sku,
           quantity,
-        });
+        }]);
       }
 
       const duration = Date.now() - startTime;
@@ -137,10 +137,10 @@ export class StockProcessor {
       const odooStock = await this.odooService.getStockBySku(sku);
 
       // Actualizar en Falabella
-      await this.falabellaService.updateStock({
+      await this.falabellaService.updateStock([{
         sku,
         quantity: odooStock,
-      });
+      }]);
 
       const duration = Date.now() - startTime;
 
