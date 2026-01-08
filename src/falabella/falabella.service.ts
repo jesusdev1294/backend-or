@@ -304,6 +304,53 @@ export class FalabellaService {
   }
 
   /**
+   * Obtiene los items de una orden específica por ID
+   */
+  async getOrderItems(orderId: string): Promise<any> {
+    const startTime = Date.now();
+    const logData = {
+      service: 'falabella',
+      action: 'get_order_items',
+      status: 'pending',
+      request: { orderId },
+      orderId,
+    };
+
+    try {
+      this.logger.log(`Getting order items for order ${orderId} from Falabella`);
+      
+      const params = this.getBaseParams('GetOrderItems', { OrderId: orderId });
+      const fullUrl = this.buildUrl(params);
+
+      const response = await axios.get(fullUrl, { headers: this.getHeaders() });
+      
+      const duration = Date.now() - startTime;
+      
+      await this.logsService.create({
+        ...logData,
+        status: 'success',
+        response: response.data,
+        duration,
+      });
+
+      return response.data;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      await this.logsService.create({
+        ...logData,
+        status: 'error',
+        errorMessage: error.message,
+        response: error.response?.data,
+        duration,
+      });
+
+      this.logger.error(`Error getting order items from Falabella: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Marca una orden como "Lista para enviar"
    */
   async setStatusToReadyToShip(

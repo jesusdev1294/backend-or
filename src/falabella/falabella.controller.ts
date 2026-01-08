@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { FalabellaService } from './falabella.service';
 import { LogsService } from '../logs/logs.service';
+import { OdooService } from '../odoo/odoo.service';
 import { FalabellaOrder } from './interfaces/falabella.interface';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -22,54 +23,128 @@ export class FalabellaController {
 
   constructor(
     private readonly falabellaService: FalabellaService,
+    private readonly odooService: OdooService,
     private readonly logsService: LogsService,
     @InjectQueue('stock-updates') private stockQueue: Queue,
   ) {}
 
   /**
    * Webhook para recibir órdenes de Falabella
+   * Flujo: Webhook → getOrderItems → Odoo (searchProduct → getStockQuant → reduceStock)
    */
   @Post('webhook/order')
   async handleOrderWebhook(
-    // @Body() order: FalabellaOrder,
-     @Body() order: any,
+    @Body() order: any,
     @Headers('x-falabella-signature') signature: string,
   ) {
-    this.logger.log(`Received order webhook from Falabella: ${order}`);
+    this.logger.log(`Received order webhook from Falabella. OrderId: ${order.orderId || 'N/A'}`);
 
+    // Registrar recepción del webhook
     await this.logsService.create({
       service: 'falabella',
       action: 'webhook_received',
       status: 'success',
       request: order,
-      //orderId: order.orderId,
+      orderId: order.orderId,
       metadata: { signature },
     });
 
-    // Agregar a cola de Redis para procesar con Odoo: encolar por cada producto
-    // for (const product of (order.products || [])) {
-    //   await this.stockQueue.add('reduce-stock', {
-    //     orderId: order.orderId,
-    //     sku: product.sku,
-    //     quantity: product.quantity,
-    //     source: 'falabella',
-    //   });
+    try {
+      // Paso 1: Obtener los items de la orden desde Falabella API
+      const orderId = order.orderId || order.OrderId;
+      if (!orderId) {
+        throw new Error('OrderId not found in webhook payload');
+      }
 
-    //   this.logger.log(
-    //     `Added to queue: reduce stock for SKU ${product.sku} (Order: ${order.orderId})`,
-    //   );
-    // }
+      this.logger.log(`🔍 Paso 1: Fetching order items for OrderId: ${orderId}`);
+      const orderItemsResponse = await this.falabellaService.getOrderItems(orderId);
 
-      //   await this.stockQueue.add('reduce-stock', {
-      //   order
-      // });
+      // Extraer items de la respuesta
+      const orderItems = orderItemsResponse?.SuccessResponse?.Body?.OrderItems?.OrderItem;
+      
+      // Manejar tanto un solo item como array de items
+      const items = Array.isArray(orderItems) ? orderItems : [orderItems];
+      const processedItems = [];
 
+      // Procesar cada item secuencialmente
+      for (const item of items) {
+        if (item?.Sku) {
+          const sku = item.Sku;
+          const quantity = 1; // Falabella generalmente envía 1 unidad por OrderItem
 
-    return {
-      success: true,
-      message: 'Order received and queued for processing',
-      order: order,
-    };
+          this.logger.log(`\n📦 Processing item: ${item.Name} (SKU: ${sku})`);
+
+          try {
+            // Paso 2: Buscar producto en Odoo por SKU
+            this.logger.log(`🔍 Paso 2: Searching product in Odoo for SKU: ${sku}`);
+            const product = await this.odooService.searchProductBySku(sku);
+            this.logger.log(`✅ Product found: ID=${product.id}, Stock=${product.qty_available}`);
+
+            // Paso 3: Obtener stock.quant del producto
+            this.logger.log(`🔍 Paso 3: Getting stock quant for product ${product.id}`);
+            const stockQuant = await this.odooService.getStockQuant(product.id, 8);
+            this.logger.log(`✅ Stock Quant found: ID=${stockQuant.id}, Quantity=${stockQuant.quantity}`);
+
+            // Paso 4: Reducir stock en Odoo (ejecuta los 4 pasos internos)
+            this.logger.log(`📉 Paso 4: Reducing stock for SKU: ${sku}, Quantity: ${quantity}`);
+            const result = await this.odooService.reduceStock(sku, quantity, orderId);
+            this.logger.log(`✅ Stock reduced: ${result.previousStock} → ${result.newStock}`);
+
+            processedItems.push({
+              sku,
+              orderItemId: item.OrderItemId,
+              name: item.Name,
+              previousStock: result.previousStock,
+              newStock: result.newStock,
+              success: true,
+            });
+          } catch (itemError) {
+            this.logger.error(`❌ Error processing SKU ${sku}: ${itemError.message}`);
+            processedItems.push({
+              sku,
+              orderItemId: item.OrderItemId,
+              name: item.Name,
+              success: false,
+              error: itemError.message,
+            });
+          }
+        }
+      }
+
+      // Registrar resultado final
+      await this.logsService.create({
+        service: 'falabella',
+        action: 'webhook_processing_completed',
+        status: 'success',
+        request: { orderId, itemCount: items.length },
+        response: { processedItems },
+        orderId,
+      });
+
+      return {
+        success: true,
+        message: 'Order processed successfully',
+        orderId: orderId,
+        itemsProcessed: processedItems.length,
+        items: processedItems,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Error processing webhook: ${error.message}`);
+      
+      await this.logsService.create({
+        service: 'falabella',
+        action: 'webhook_processing_error',
+        status: 'error',
+        request: order,
+        errorMessage: error.message,
+        orderId: order.orderId,
+      });
+
+      throw new HttpException(
+        `Failed to process webhook: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   /**
