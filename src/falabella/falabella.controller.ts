@@ -34,24 +34,30 @@ export class FalabellaController {
    */
   @Post('webhook/order')
   async handleOrderWebhook(
-    @Body() order: any,
+    @Body() body: any,
     @Headers('x-falabella-signature') signature: string,
   ) {
-    this.logger.log(`Received order webhook from Falabella. OrderId: ${order.orderId || 'N/A'}`);
+    // Extraer orderId desde diferentes estructuras posibles
+    const orderId = body.payload?.OrderId || body.orderId || body.OrderId;
+    
+    this.logger.log(`Received order webhook from Falabella. Event: ${body.event || 'N/A'}, OrderId: ${orderId || 'N/A'}`);
 
     // Registrar recepción del webhook
     await this.logsService.create({
       service: 'falabella',
       action: 'webhook_received',
       status: 'success',
-      request: order,
-      orderId: order.orderId,
-      metadata: { signature },
+      request: body,
+      orderId: orderId,
+      metadata: { 
+        signature,
+        event: body.event,
+        newStatus: body.payload?.NewStatus,
+      },
     });
 
     try {
-      // Paso 1: Obtener los items de la orden desde Falabella API
-      const orderId = order.orderId || order.OrderId;
+      // Validar que tenemos orderId
       if (!orderId) {
         throw new Error('OrderId not found in webhook payload');
       }
@@ -135,9 +141,9 @@ export class FalabellaController {
         service: 'falabella',
         action: 'webhook_processing_error',
         status: 'error',
-        request: order,
+        request: body,
         errorMessage: error.message,
-        orderId: order.orderId,
+        orderId: body.payload?.OrderId || body.orderId || body.OrderId,
       });
 
       throw new HttpException(
