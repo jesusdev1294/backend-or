@@ -36,9 +36,15 @@ export class FalabellaService {
     const sortedKeys = Object.keys(params).sort();
     const concatenated = sortedKeys.map(key => `${key}=${encodeURIComponent(params[key])}`).join('&');
     
+    this.logger.debug(`Signature string: ${concatenated}`);
+    
     const hmac = crypto.createHmac('sha256', this.apiKey);
     hmac.update(concatenated);
-    return hmac.digest('hex');
+    const signature = hmac.digest('hex');
+    
+    this.logger.debug(`Generated signature: ${signature}`);
+    
+    return signature;
   }
 
   /**
@@ -46,8 +52,11 @@ export class FalabellaService {
    */
   private getTimestamp(): string {
     const now = new Date();
-    // Obtener fecha en UTC y ajustar a Chile (UTC-3)
-    const chileTime = new Date(now.getTime() - (3 * 60 * 60 * 1000));
+    
+    // Obtener timestamp UTC en milisegundos y ajustar a Chile (UTC-3)
+    // UTC-3 significa restar 3 horas del tiempo UTC
+    const chileOffsetMs = 3 * 60 * 60 * 1000;
+    const chileTime = new Date(now.getTime() - chileOffsetMs);
     
     const year = chileTime.getUTCFullYear();
     const month = String(chileTime.getUTCMonth() + 1).padStart(2, '0');
@@ -56,7 +65,10 @@ export class FalabellaService {
     const minutes = String(chileTime.getUTCMinutes()).padStart(2, '0');
     const seconds = String(chileTime.getUTCSeconds()).padStart(2, '0');
     
-    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}-03:00`;
+    const timestamp = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}-03:00`;
+    this.logger.debug(`Generated timestamp: ${timestamp}`);
+    
+    return timestamp;
   }
 
   /**
@@ -323,6 +335,10 @@ export class FalabellaService {
       
       const params = this.getBaseParams('GetOrderItems', { OrderId: orderId });
       const fullUrl = this.buildUrl(params);
+
+      // Log detallado para debugging
+      this.logger.debug(`Full URL: ${fullUrl}`);
+      this.logger.debug(`Params: ${JSON.stringify(params, null, 2)}`);
 
       const response = await axios.get(fullUrl, { headers: this.getHeaders() });
       
