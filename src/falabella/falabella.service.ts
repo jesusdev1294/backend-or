@@ -42,17 +42,19 @@ export class FalabellaService {
   }
 
   /**
-   * Obtiene el timestamp en formato ISO 8601 con zona horaria de Chile
+   * Obtiene el timestamp en formato ISO 8601 con zona horaria de Chile (UTC-3)
    */
   private getTimestamp(): string {
     const now = new Date();
-    // Chile usa UTC-3 (sin considerar horario de verano para simplificar)
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
+    // Obtener fecha en UTC y ajustar a Chile (UTC-3)
+    const chileTime = new Date(now.getTime() - (3 * 60 * 60 * 1000));
+    
+    const year = chileTime.getUTCFullYear();
+    const month = String(chileTime.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(chileTime.getUTCDate()).padStart(2, '0');
+    const hours = String(chileTime.getUTCHours()).padStart(2, '0');
+    const minutes = String(chileTime.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(chileTime.getUTCSeconds()).padStart(2, '0');
     
     return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}-03:00`;
   }
