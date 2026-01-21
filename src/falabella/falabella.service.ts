@@ -30,44 +30,42 @@ export class FalabellaService {
 
   /**
    * Genera la firma HMAC-SHA256 requerida por la API de Falabella
-   * Formato: key=value&key=value (valores URL encoded, ordenados alfabéticamente)
+   * IMPORTANTE: La firma se calcula con valores SIN URL encoding
+   * Formato: key=value&key=value (ordenados alfabéticamente, valores raw)
    */
   private generateSignature(params: Record<string, any>): string {
     const sortedKeys = Object.keys(params).sort();
-    const concatenated = sortedKeys.map(key => `${key}=${encodeURIComponent(params[key])}`).join('&');
-    
+    // NO usar encodeURIComponent aquí - la firma se calcula con valores sin encoding
+    const concatenated = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
+
     this.logger.debug(`Signature string: ${concatenated}`);
-    
+
     const hmac = crypto.createHmac('sha256', this.apiKey);
     hmac.update(concatenated);
     const signature = hmac.digest('hex');
-    
+
     this.logger.debug(`Generated signature: ${signature}`);
-    
+
     return signature;
   }
 
   /**
    * Obtiene el timestamp en formato ISO 8601 con zona horaria de Chile (UTC-3)
+   * Según API Explorer de Falabella: YYYY-MM-DDTHH:MM:SS-03:00
    */
   private getTimestamp(): string {
     const now = new Date();
-    
-    // Obtener timestamp UTC en milisegundos y ajustar a Chile (UTC-3)
-    // UTC-3 significa restar 3 horas del tiempo UTC
-    const chileOffsetMs = 3 * 60 * 60 * 1000;
-    const chileTime = new Date(now.getTime() - chileOffsetMs);
-    
-    const year = chileTime.getUTCFullYear();
-    const month = String(chileTime.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(chileTime.getUTCDate()).padStart(2, '0');
-    const hours = String(chileTime.getUTCHours()).padStart(2, '0');
-    const minutes = String(chileTime.getUTCMinutes()).padStart(2, '0');
-    const seconds = String(chileTime.getUTCSeconds()).padStart(2, '0');
-    
+
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
     const timestamp = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}-03:00`;
     this.logger.debug(`Generated timestamp: ${timestamp}`);
-    
+
     return timestamp;
   }
 
@@ -96,7 +94,7 @@ export class FalabellaService {
       Version: this.version,
       ...additionalParams,
     };
-    
+
     const signature = this.generateSignature(params);
     return { ...params, Signature: signature };
   }
@@ -124,10 +122,10 @@ export class FalabellaService {
 
     try {
       this.logger.log(`Updating stock for ${products.length} products in Falabella`);
-      
+
       const params = this.getBaseParams('UpdateStock');
       const fullUrl = this.buildUrl(params);
-      
+
       const body = {
         Request: {
           Product: products.map(p => ({
@@ -138,9 +136,9 @@ export class FalabellaService {
       };
 
       const response = await axios.post(fullUrl, body, { headers: this.getHeaders() });
-      
+
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'success',
@@ -152,7 +150,7 @@ export class FalabellaService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'error',
@@ -180,17 +178,17 @@ export class FalabellaService {
 
     try {
       this.logger.log(`Getting products from Falabella`);
-      
+
       const additionalParams: Record<string, string> = { Filter: 'all' };
       if (search) additionalParams['Search'] = search;
-      
+
       const params = this.getBaseParams('GetProducts', additionalParams);
       const fullUrl = this.buildUrl(params);
 
       const response = await axios.get(fullUrl, { headers: this.getHeaders() });
-      
+
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'success',
@@ -201,7 +199,7 @@ export class FalabellaService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'error',
@@ -234,18 +232,18 @@ export class FalabellaService {
 
     try {
       this.logger.log(`Getting orders from Falabella`);
-      
+
       const additionalParams: Record<string, string> = {};
       if (createdAfter) additionalParams['CreatedAfter'] = createdAfter;
       if (createdBefore) additionalParams['CreatedBefore'] = createdBefore;
-      
+
       const params = this.getBaseParams('GetOrders', additionalParams);
       const fullUrl = this.buildUrl(params);
 
       const response = await axios.get(fullUrl, { headers: this.getHeaders() });
-      
+
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'success',
@@ -256,7 +254,7 @@ export class FalabellaService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'error',
@@ -285,14 +283,14 @@ export class FalabellaService {
 
     try {
       this.logger.log(`Getting order ${orderId} from Falabella`);
-      
+
       const params = this.getBaseParams('GetOrder', { OrderId: orderId });
       const fullUrl = this.buildUrl(params);
 
       const response = await axios.get(fullUrl, { headers: this.getHeaders() });
-      
+
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'success',
@@ -303,7 +301,7 @@ export class FalabellaService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'error',
@@ -332,7 +330,7 @@ export class FalabellaService {
 
     try {
       this.logger.log(`Getting order items for order ${orderId} from Falabella`);
-      
+
       const params = this.getBaseParams('GetOrderItems', { OrderId: orderId });
       const fullUrl = this.buildUrl(params);
 
@@ -341,9 +339,9 @@ export class FalabellaService {
       this.logger.debug(`Params: ${JSON.stringify(params, null, 2)}`);
 
       const response = await axios.get(fullUrl, { headers: this.getHeaders() });
-      
+
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'success',
@@ -354,7 +352,7 @@ export class FalabellaService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'error',
@@ -386,10 +384,10 @@ export class FalabellaService {
 
     try {
       this.logger.log(`Setting ${orderItemIds.length} items to ready to ship`);
-      
+
       const params = this.getBaseParams('SetStatusToReadyToShip');
       const fullUrl = this.buildUrl(params);
-      
+
       const body = {
         Request: {
           OrderItem: orderItemIds.map(id => ({
@@ -401,9 +399,9 @@ export class FalabellaService {
       };
 
       const response = await axios.post(fullUrl, body, { headers: this.getHeaders() });
-      
+
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'success',
@@ -415,7 +413,7 @@ export class FalabellaService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         ...logData,
         status: 'error',
@@ -434,17 +432,17 @@ export class FalabellaService {
    */
   async getProductBySku(sku: string): Promise<any> {
     const startTime = Date.now();
-    
+
     try {
       this.logger.log(`Getting product info for SKU: ${sku}`);
-      
+
       const params = this.getBaseParams('GetProducts', { Filter: 'all', Search: sku });
       const fullUrl = this.buildUrl(params);
 
       const response = await axios.get(fullUrl, { headers: this.getHeaders() });
 
       const duration = Date.now() - startTime;
-      
+
       await this.logsService.create({
         service: 'falabella',
         action: 'get_product_by_sku',
@@ -477,12 +475,12 @@ export class FalabellaService {
       this.logger.warn('FALABELLA_WEBHOOK_SECRET not configured');
       return true;
     }
-    
+
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
       .update(JSON.stringify(payload))
       .digest('hex');
-    
+
     return signature === expectedSignature;
   }
 }
