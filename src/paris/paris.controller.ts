@@ -125,46 +125,47 @@ export class ParisController {
     }
 
     /**
-     * Obtener productos de Paris
+     * Obtener stock de Paris (v2 - usa JWT)
      */
-    @Get('products')
-    async getProducts(
+    @Get('stock')
+    async getStock(
         @Query('limit') limit: number = 100,
-        @Query('page') page: number = 1,
+        @Query('offset') offset: number = 0,
     ) {
         try {
-            const products = await this.parisService.getProducts(Number(limit), Number(page));
+            const skus = await this.parisService.getStock(Number(limit), Number(offset));
             return {
                 success: true,
-                count: products.length,
-                data: products,
+                count: skus.length,
+                data: skus,
             };
         } catch (error) {
             throw new HttpException(
-                error.message || 'Failed to get products',
+                error.message || 'Failed to get stock',
                 HttpStatus.INTERNAL_SERVER_ERROR,
             );
         }
     }
 
     /**
-     * Obtener producto por SKU
+     * Obtener stock de un SKU específico
      */
-    @Get('products/:sku')
-    async getProductBySku(@Param('sku') sku: string) {
+    @Get('stock/:sku')
+    async getStockBySku(@Param('sku') sku: string) {
         try {
-            const product = await this.parisService.getProductBySku(sku);
-            if (!product) {
-                throw new HttpException('Product not found', HttpStatus.NOT_FOUND);
+            const skus = await this.parisService.getStock(1000, 0);
+            const skuData = skus.find((s: any) => s.sku_seller === sku || s.sku === sku);
+            if (!skuData) {
+                throw new HttpException('SKU not found', HttpStatus.NOT_FOUND);
             }
             return {
                 success: true,
-                data: product,
+                data: skuData,
             };
         } catch (error) {
             if (error instanceof HttpException) throw error;
             throw new HttpException(
-                error.message || 'Failed to get product',
+                error.message || 'Failed to get stock',
                 HttpStatus.INTERNAL_SERVER_ERROR,
             );
         }

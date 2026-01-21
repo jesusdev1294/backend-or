@@ -2,66 +2,140 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import { LogsService } from '../logs/logs.service';
-import { ParisProduct, ParisStockUpdate, ParisOrder, ParisApiResponse } from './interfaces/paris.interface';
+import { ParisProduct, ParisOrder, ParisApiResponse } from './interfaces/paris.interface';
 
 @Injectable()
 export class ParisService {
     private readonly logger = new Logger(ParisService.name);
-    private readonly apiClient: AxiosInstance;
+    private readonly apiUrl: string;
+    private readonly apiKey: string;
     private readonly sellerId: string;
+
+    // JWT token cache
+    private jwtToken: string | null = null;
+    private jwtExpiresAt: number = 0;
 
     constructor(
         private configService: ConfigService,
         private logsService: LogsService,
     ) {
-        const apiUrl = this.configService.get('PARIS_API_URL') || 'https://api-developers.ecomm.cencosud.com';
-        const apiKey = this.configService.get('PARIS_API_KEY');
+        this.apiUrl = this.configService.get('PARIS_API_URL') || 'https://api-developers.ecomm.cencosud.com';
+        this.apiKey = this.configService.get('PARIS_API_KEY') || '';
         this.sellerId = this.configService.get('PARIS_SELLER_ID') || '';
 
-        this.apiClient = axios.create({
-            baseURL: apiUrl,
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${apiKey}`, // Bearer token auth
-            },
-            timeout: 30000,
-        });
-
-        this.logger.log(`ParisService initialized. API: ${apiUrl}, SellerId: ${this.sellerId}`);
+        this.logger.log(`ParisService initialized. API: ${this.apiUrl}, SellerId: ${this.sellerId}`);
     }
 
     /**
-     * Obtener todos los productos
+     * Obtiene un JWT token para operaciones que lo requieren (stock, productos v2)
+     * El token se cachea por 4 horas (14400 segundos)
      */
-    async getProducts(limit: number = 100, page: number = 1): Promise<ParisProduct[]> {
+    private async getJwtToken(): Promise<string> {
+        // Check if we have a valid cached token (with 5 min buffer)
+        const now = Date.now();
+        if (this.jwtToken && this.jwtExpiresAt > now + 300000) {
+            return this.jwtToken;
+        }
+
+        this.logger.log('Obtaining new JWT token from Paris...');
+
+        try {
+            const response = await axios.post(
+                `${this.apiUrl}/v1/auth/apiKey`,
+                {},
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.apiKey}`,
+                    },
+                }
+            );
+
+            this.jwtToken = response.data.accessToken;
+            // Token expires in 14400 seconds (4 hours)
+            const expiresIn = parseInt(response.data.expiresIn) || 14400;
+            this.jwtExpiresAt = now + (expiresIn * 1000);
+
+            this.logger.log(`JWT token obtained, expires in ${expiresIn} seconds`);
+
+            await this.logsService.create({
+                service: 'paris',
+                action: 'get_jwt_token',
+                status: 'success',
+                response: { expiresIn },
+            });
+
+            return this.jwtToken;
+        } catch (error) {
+            this.logger.error(`Error getting JWT token: ${error.message}`);
+            await this.logsService.create({
+                service: 'paris',
+                action: 'get_jwt_token',
+                status: 'error',
+                errorMessage: error.message,
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Crea un cliente axios con el token apropiado
+     * - JWT para endpoints de stock y productos v2
+     * - API Key simple para orders v1
+     */
+    private async getApiClient(useJwt: boolean = false): Promise<AxiosInstance> {
+        let authHeader: string;
+
+        if (useJwt) {
+            const jwt = await this.getJwtToken();
+            authHeader = `Bearer ${jwt}`;
+        } else {
+            authHeader = `Bearer ${this.apiKey}`;
+        }
+
+        return axios.create({
+            baseURL: this.apiUrl,
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': authHeader,
+            },
+            timeout: 30000,
+        });
+    }
+
+    /**
+     * Obtener stock de productos (v2 - requiere JWT)
+     */
+    async getStock(limit: number = 100, offset: number = 0): Promise<any[]> {
         const startTime = Date.now();
         const logData = {
             service: 'paris',
-            action: 'get_products',
+            action: 'get_stock',
             status: 'pending',
-            request: { limit, page },
+            request: { limit, offset },
         };
 
         try {
-            this.logger.log(`Getting products from Paris (limit: ${limit}, page: ${page})`);
+            this.logger.log(`Getting stock from Paris (limit: ${limit}, offset: ${offset})`);
 
-            const response = await this.apiClient.get<ParisApiResponse<ParisProduct[]>>('/v1/products', {
-                params: { limit, page, sellerId: this.sellerId },
+            const client = await this.getApiClient(true); // Use JWT
+            const response = await client.get('/v2/stock', {
+                params: { limit, offset },
             });
 
-            const products = response.data.products || response.data.data || [];
+            const skus = response.data.skus || [];
             const duration = Date.now() - startTime;
 
             await this.logsService.create({
                 ...logData,
                 status: 'success',
-                response: { count: products.length },
+                response: { count: skus.length, total: response.data.pagging?.quantity },
                 duration,
             });
 
-            this.logger.log(`Retrieved ${products.length} products from Paris`);
-            return products;
+            this.logger.log(`Retrieved ${skus.length} SKUs from Paris (total: ${response.data.pagging?.quantity})`);
+            return skus;
         } catch (error) {
             const duration = Date.now() - startTime;
             await this.logsService.create({
@@ -71,69 +145,14 @@ export class ParisService {
                 response: error.response?.data,
                 duration,
             });
-            this.logger.error(`Error getting products: ${error.message}`);
+            this.logger.error(`Error getting stock: ${error.message}`);
             throw error;
         }
     }
 
     /**
-     * Obtener producto por SKU
-     */
-    async getProductBySku(sku: string): Promise<ParisProduct | null> {
-        const startTime = Date.now();
-        const logData = {
-            service: 'paris',
-            action: 'get_product_by_sku',
-            status: 'pending',
-            request: { sku },
-            productSku: sku,
-        };
-
-        try {
-            this.logger.log(`Getting product for SKU: ${sku}`);
-
-            const response = await this.apiClient.get<ParisApiResponse<ParisProduct>>(`/v1/products/${sku}`, {
-                params: { sellerId: this.sellerId },
-            });
-
-            const product: ParisProduct | null = (response.data.data as ParisProduct) || null;
-            const duration = Date.now() - startTime;
-
-            await this.logsService.create({
-                ...logData,
-                status: 'success',
-                response: product,
-                duration,
-            });
-
-            return product;
-        } catch (error) {
-            const duration = Date.now() - startTime;
-
-            // 404 means product not found, not an error
-            if (error.response?.status === 404) {
-                await this.logsService.create({
-                    ...logData,
-                    status: 'success',
-                    response: null,
-                    duration,
-                });
-                return null;
-            }
-
-            await this.logsService.create({
-                ...logData,
-                status: 'error',
-                errorMessage: error.message,
-                duration,
-            });
-            this.logger.error(`Error getting product by SKU: ${error.message}`);
-            throw error;
-        }
-    }
-
-    /**
-     * Actualizar stock de productos (PUT /v1/stock)
+     * Actualizar stock de productos (v1 - requiere JWT)
+     * Endpoint: POST /v1/stock/sku-seller
      */
     async updateStock(products: Array<{ sku: string; quantity: number }>): Promise<any> {
         const startTime = Date.now();
@@ -147,16 +166,17 @@ export class ParisService {
         try {
             this.logger.log(`Updating stock for ${products.length} products in Paris`);
 
-            // Construir payload según documentación de Cencosud
-            const stockUpdates = products.map((p) => ({
-                sku: p.sku,
-                quantity: p.quantity,
-                sellerId: this.sellerId,
-            }));
+            const client = await this.getApiClient(true); // Use JWT
 
-            const response = await this.apiClient.put('/v1/stock', {
-                stocks: stockUpdates,
-            });
+            // Formato según documentación de Paris
+            const body = {
+                skus: products.map((p) => ({
+                    sku_seller: p.sku,
+                    quantity: p.quantity,
+                })),
+            };
+
+            const response = await client.post('/v1/stock/sku-seller', body);
 
             const duration = Date.now() - startTime;
 
@@ -167,7 +187,7 @@ export class ParisService {
                 duration,
             });
 
-            this.logger.log(`Stock updated in Paris successfully`);
+            this.logger.log(`Stock updated in Paris: ${response.data.skusUpdated?.length || 0} SKUs updated`);
             return response.data;
         } catch (error) {
             const duration = Date.now() - startTime;
@@ -184,7 +204,7 @@ export class ParisService {
     }
 
     /**
-     * Obtener órdenes
+     * Obtener órdenes (v1 - usa API Key simple)
      */
     async getOrders(startDate?: string, status?: string): Promise<ParisOrder[]> {
         const startTime = Date.now();
@@ -198,13 +218,14 @@ export class ParisService {
         try {
             this.logger.log(`Getting orders from Paris`);
 
+            const client = await this.getApiClient(false); // Use API Key
             const params: any = { sellerId: this.sellerId, limit: 100 };
             if (startDate) params.startDate = startDate;
             if (status) params.status = status;
 
-            const response = await this.apiClient.get<ParisApiResponse<ParisOrder[]>>('/v1/orders', { params });
+            const response = await client.get<ParisApiResponse<ParisOrder[]>>('/v1/orders', { params });
 
-            const orders = response.data.orders || response.data.data || [];
+            const orders = response.data.data || [];
             const duration = Date.now() - startTime;
 
             await this.logsService.create({
@@ -214,6 +235,7 @@ export class ParisService {
                 duration,
             });
 
+            this.logger.log(`Retrieved ${orders.length} orders from Paris`);
             return orders;
         } catch (error) {
             const duration = Date.now() - startTime;
@@ -229,7 +251,7 @@ export class ParisService {
     }
 
     /**
-     * Health check - verificar conexión
+     * Health check - verificar conexión usando órdenes (no requiere JWT)
      */
     async healthCheck(): Promise<{ connected: boolean; message: string }> {
         const startTime = Date.now();
@@ -237,8 +259,8 @@ export class ParisService {
         try {
             this.logger.log('Checking Paris API connection');
 
-            // Try to get products with limit 1 as health check
-            await this.apiClient.get('/v1/products', {
+            const client = await this.getApiClient(false);
+            await client.get('/v1/orders', {
                 params: { limit: 1, sellerId: this.sellerId },
             });
 
@@ -280,7 +302,8 @@ export class ParisService {
         try {
             this.logger.log(`Getting order ${orderId} from Paris`);
 
-            const response = await this.apiClient.get(`/v1/orders/${orderId}`, {
+            const client = await this.getApiClient(false);
+            const response = await client.get(`/v1/orders/${orderId}`, {
                 params: { sellerId: this.sellerId },
             });
             const order = response.data.data || response.data || null;
@@ -334,7 +357,8 @@ export class ParisService {
         try {
             this.logger.log(`Getting items for order ${orderId}`);
 
-            const response = await this.apiClient.get(`/v1/orders/${orderId}/items`, {
+            const client = await this.getApiClient(false);
+            const response = await client.get(`/v1/orders/${orderId}/items`, {
                 params: { sellerId: this.sellerId },
             });
             const items = response.data.items || response.data.data || [];
@@ -380,6 +404,7 @@ export class ParisService {
         try {
             this.logger.log(`Setting ${orderItemIds.length} items to ready to ship`);
 
+            const client = await this.getApiClient(false);
             const shipmentData = {
                 sellerId: this.sellerId,
                 items: orderItemIds.map((itemId) => ({
@@ -390,7 +415,7 @@ export class ParisService {
                 })),
             };
 
-            const response = await this.apiClient.put('/v1/shipments', shipmentData);
+            const response = await client.put('/v1/shipments', shipmentData);
             const duration = Date.now() - startTime;
 
             await this.logsService.create({
@@ -425,7 +450,7 @@ export class ParisService {
 
             if (!webhookSecret) {
                 this.logger.warn('PARIS_WEBHOOK_SECRET not configured, skipping validation');
-                return true; // Skip validation if no secret configured
+                return true;
             }
 
             const crypto = await import('crypto');
@@ -451,4 +476,3 @@ export class ParisService {
         }
     }
 }
-
