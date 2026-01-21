@@ -1,59 +1,78 @@
-# Backend Orquestador - NestJS
+# 🛒 Orquestador de Marketplaces - Hyper PC
 
-Backend del orquestador desarrollado con NestJS y expuesto públicamente con ngrok.
+Sistema de orquestación multi-marketplace desarrollado con NestJS que sincroniza inventario entre **Falabella**, **Ripley**, **Paris** y **Odoo** (ERP).
 
 ## 🚀 Inicio Rápido
 
 ### 1. Instalar dependencias
 ```bash
-cd /Users/jesusdev/Documents/hyper-pc/orquestador/backend-or
 npm install
 ```
 
-### 2. Instalar ngrok (primera vez)
+### 2. Configurar variables de entorno
 ```bash
-brew install ngrok/ngrok/ngrok
+cp .env.example .env
+# Editar .env con las credenciales correctas
 ```
 
-### 3. Ejecutar el servidor
+### 3. Levantar servicios (MongoDB + Redis)
+```bash
+# Con Docker/Colima mas ligero
+DOCKER_CONTEXT=colima docker-compose up -d
 
-**Terminal 1 - Servidor NestJS:**
+# Verificar
+docker ps
+```
+
+### 4. Ejecutar el servidor
 ```bash
 npm run start:dev
 ```
 
 El servidor se iniciará en `http://localhost:3000`
 
-**Terminal 2 - ngrok (exponer públicamente):**
-```bash
-npm run ngrok
-```
-
-O manualmente:
+### 5. (Opcional) Exponer con ngrok para webhooks
 ```bash
 ngrok http 3000
 ```
 
-ngrok mostrará una URL pública como: `https://xxxx-xxxx-xxxx.ngrok-free.app`
+## 🧪 Testing
 
-## 🧪 Probar el Endpoint
-
-### Localmente:
+### Health Check:
 ```bash
-curl http://localhost:3000/test
+curl http://localhost:3000/health
 ```
 
-### Desde afuera (con ngrok):
+### Falabella:
 ```bash
-curl https://tu-url-de-ngrok.ngrok-free.app/test
+# Listar productos
+curl http://localhost:3000/falabella/products
+
+# Webhook (simulado)
+curl -X POST http://localhost:3000/falabella/webhook/order \
+  -H "Content-Type: application/json" \
+  -d '{"event": "onOrderItemsStatusChanged", "payload": {...}}'
 ```
 
-### Respuesta esperada:
-```json
-{
-  "message": "Test OK",
-  "timestamp": "2025-12-15T12:34:56.789Z"
-}
+### Ripley:
+```bash
+# Health check
+curl http://localhost:3000/ripley/health
+
+# Listar productos
+curl http://localhost:3000/ripley/products?max=5
+```
+
+### Paris:
+```bash
+# Listar órdenes
+curl http://localhost:3000/paris/orders
+```
+
+### Odoo:
+```bash
+# Consultar stock
+curl http://localhost:3000/odoo/stock/SKU-PRODUCTO
 ```
 
 ## 📁 Estructura del Proyecto
@@ -61,15 +80,38 @@ curl https://tu-url-de-ngrok.ngrok-free.app/test
 ```
 backend-or/
 ├── src/
-│   ├── main.ts              # Punto de entrada (puerto 3000, CORS habilitado)
-│   ├── app.module.ts        # Módulo raíz
-│   └── app.controller.ts    # Controlador con endpoint /test
-├── dist/                    # Compilado (autogenerado)
-├── node_modules/            # Dependencias
-├── package.json             # Configuración y scripts
-├── tsconfig.json            # Configuración TypeScript
-├── nest-cli.json            # Configuración NestJS CLI
-└── .gitignore               # Exclusiones de Git
+│   ├── main.ts                    # Punto de entrada
+│   ├── app.module.ts              # Módulo raíz
+│   ├── app.controller.ts          # Health check
+│   ├── falabella/                 # Módulo Falabella
+│   │   ├── falabella.controller.ts
+│   │   ├── falabella.service.ts
+│   │   ├── falabella.module.ts
+│   │   └── interfaces/
+│   ├── ripley/                    # Módulo Ripley (Mirakl)
+│   │   ├── ripley.controller.ts
+│   │   ├── ripley.service.ts
+│   │   ├── ripley.module.ts
+│   │   └── interfaces/
+│   ├── paris/                     # Módulo Paris (Cencosud)
+│   │   ├── paris.controller.ts
+│   │   ├── paris.service.ts
+│   │   ├── paris.module.ts
+│   │   └── interfaces/
+│   ├── odoo/                      # Módulo Odoo (ERP)
+│   │   ├── odoo.controller.ts
+│   │   ├── odoo.service.ts
+│   │   ├── odoo.module.ts
+│   │   └── interfaces/
+│   ├── queues/                    # Sistema de colas (Bull)
+│   │   ├── queues.module.ts
+│   │   └── stock.processor.ts    # Sincronización
+│   └── common/                    # Utilidades comunes
+│       └── interceptors/
+├── docker-compose.yml             # MongoDB + Redis
+├── .env                           # Variables de entorno (no en Git)
+├── .env.example                   # Template de variables
+└── package.json
 ```
 
 ## 📜 Scripts Disponibles
@@ -81,24 +123,76 @@ backend-or/
 
 ## 🔧 Configuración
 
-- **Puerto:** 3000 (configurado en `src/main.ts`)
-- **CORS:** Habilitado para acceso externo
-- **Endpoint de prueba:** `GET /test`
+### Stack Tecnológico:
+- **Framework:** NestJS + TypeScript
+- **Base de Datos:** MongoDB Atlas (logs y auditoría)
+- **Colas:** Redis + Bull (procesamiento asíncrono)
+- **ERP:** Odoo (fuente de verdad del inventario)
+- **Deploy:** Railway (producción)
+
+### Variables de Entorno:
+Ver `.env.example` para el template completo. Necesitas configurar:
+- Credenciales de Falabella (API Key, Seller ID)
+- Credenciales de Ripley/Mirakl (API Key, Shop ID)
+- Credenciales de Paris/Cencosud (API Key, Seller ID)
+- Credenciales de Odoo (URL, DB, UID, API Key)
+- MongoDB URI
+- Redis (host, port)
+
+## 🔄 Flujo de Sincronización
+
+1. **Marketplace recibe venta** (Falabella/Ripley/Paris)
+2. **Webhook → Orquestador** recibe notificación
+3. **Crear orden en Odoo** con datos del cliente
+4. **Reducir stock en Odoo** (fuente de verdad)
+5. **Sincronizar con TODOS los marketplaces** (excepto origen)
+
+**Ejemplo:** Venta en Ripley con 10 unidades en stock:
+- ✅ Reduce stock en Odoo: 10 → 9
+- ✅ Actualiza Falabella: 9 unidades
+- ✅ Actualiza Paris: 9 unidades
+- ✅ Ripley ya lo sabe (origen)
+
+## 📚 Documentación
+
+### APIs de Marketplaces:
+- **Ripley/Mirakl:** https://help.mirakl.net/api-docs/
+- **Paris/Cencosud:** https://developers.ecomm.cencosud.com/docs
+- **Falabella:** Documentación en Seller Center
 
 ## ⚠️ Notas Importantes
 
-- **ngrok es solo para desarrollo/testing**, no usar en producción
-- La URL de ngrok cambia cada vez que reinicias el túnel (a menos que uses plan pago)
-- Para mantener ngrok corriendo, no cierres la terminal donde se ejecuta
+### Particularidades por Marketplace:
 
-## 🔮 Próximos Pasos
+**Falabella:**
+- Usa firma HMAC-SHA256 con `encodeURIComponent()`
+- Requiere User ID + API Key
 
-1. ✅ Endpoint de prueba básico funcionando
-2. ⏳ Implementar arquitectura limpia por capas
-3. ⏳ Agregar validación de DTOs
-4. ⏳ Implementar lógica del orquestador
-5. ⏳ Agregar base de datos
-6. ⏳ Implementar autenticación
+**Ripley (Mirakl):**
+- Autenticación simple con API Key
+- Endpoint `/offers` (no `/products`)
+- Documentación: https://help.mirakl.net/api-docs/
+
+**Paris (Cencosud):**
+- **NO tiene endpoint GET /products**
+- Solo GET `/v1/orders` y PUT `/v1/stock`
+- Funciona con órdenes entrantes y actualización de stock
+- Documentación: https://developers.ecomm.cencosud.com/docs
+
+### Para Desarrollo Local:
+- Usa Docker/Colima para MongoDB y Redis
+- ngrok solo para testing de webhooks
+
+## ✅ Estado Actual
+
+- ✅ Falabella implementado y funcionando
+- ✅ Ripley implementado y funcionando
+- ✅ Paris implementado y funcionando
+- ✅ Odoo integrado (ERP)
+- ✅ Sincronización multi-marketplace
+- ✅ Sistema de colas (Bull + Redis)
+- ✅ Logs en MongoDB
+- ✅ Deploy en Railway
 
 ---
 
