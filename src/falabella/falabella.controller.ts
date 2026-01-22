@@ -30,7 +30,8 @@ export class FalabellaController {
 
   /**
    * Webhook para recibir órdenes de Falabella
-   * Flujo: Webhook → getOrderItems → Odoo (searchProduct → getStockQuant → reduceStock)
+   * Flujo completo: Webhook → getOrder → getOrderItems → Odoo (processMarketplaceOrder)
+   * Crea: Partner (cliente) → Sale Order → Confirma → Reduce Stock
    */
   @Post('webhook/order')
   async handleOrderWebhook(
@@ -39,8 +40,10 @@ export class FalabellaController {
   ) {
     // Extraer orderId desde diferentes estructuras posibles
     const orderId = body.payload?.OrderId || body.orderId || body.OrderId;
-    
-    this.logger.log(`Received order webhook from Falabella. Event: ${body.event || 'N/A'}, OrderId: ${orderId || 'N/A'}`);
+
+    this.logger.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    this.logger.log(`📥 Falabella Webhook: Order ${orderId}`);
+    this.logger.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
     // Registrar recepción del webhook
     await this.logsService.create({
@@ -49,7 +52,7 @@ export class FalabellaController {
       status: 'success',
       request: body,
       orderId: orderId,
-      metadata: { 
+      metadata: {
         signature,
         event: body.event,
         newStatus: body.payload?.NewStatus,
@@ -62,58 +65,72 @@ export class FalabellaController {
         throw new Error('OrderId not found in webhook payload');
       }
 
-      this.logger.log(`🔍 Paso 1: Fetching order items for OrderId: ${orderId}`);
+      // Paso 1: Obtener información completa de la orden (datos del cliente)
+      this.logger.log(`🔍 Paso 1: Fetching order details for OrderId: ${orderId}`);
+      const orderResponse = await this.falabellaService.getOrder(orderId);
+      const orderData = orderResponse?.SuccessResponse?.Body?.Orders?.Order;
+
+      if (!orderData) {
+        throw new Error(`Order data not found for OrderId: ${orderId}`);
+      }
+
+      // Extraer datos del cliente desde la orden
+      const addressShipping = orderData.AddressShipping || {};
+      const addressBilling = orderData.AddressBilling || {};
+
+      // Paso 2: Obtener items de la orden
+      this.logger.log(`🔍 Paso 2: Fetching order items for OrderId: ${orderId}`);
       const orderItemsResponse = await this.falabellaService.getOrderItems(orderId);
-
-      // Extraer items de la respuesta
       const orderItems = orderItemsResponse?.SuccessResponse?.Body?.OrderItems?.OrderItem;
-      
+
       // Manejar tanto un solo item como array de items
-      const items = Array.isArray(orderItems) ? orderItems : [orderItems];
-      const processedItems = [];
+      const rawItems = Array.isArray(orderItems) ? orderItems : [orderItems];
 
-      // Procesar cada item secuencialmente
+      // Mapear items al formato esperado por processMarketplaceOrder
+      const items = rawItems
+        .filter((item: any) => item?.Sku)
+        .map((item: any) => ({
+          sku: item.Sku,
+          quantity: parseInt(item.Quantity) || 1,
+          price: parseFloat(item.ItemPrice) || 0,
+          name: item.Name || '',
+        }));
+
+      this.logger.log(`📦 Items to process: ${items.length}`);
+
+      // Paso 3: Procesar orden completa en Odoo (crear cliente, orden, confirmar, reducir stock)
+      this.logger.log(`🔍 Paso 3: Processing order in Odoo with full flow`);
+      const result = await this.odooService.processMarketplaceOrder({
+        marketplace: 'falabella',
+        orderId: orderId,
+        customer: {
+          name: `${orderData.CustomerFirstName || ''} ${orderData.CustomerLastName || ''}`.trim() || 'Cliente Falabella',
+          email: orderData.CustomerEmail || `falabella-${orderId}@temp.cl`,
+          phone: addressShipping.Phone || addressBilling.Phone,
+          nationalId: orderData.NationalRegistrationNumber || addressBilling.NationalRegistrationNumber,
+          legalId: addressBilling.NationalRegistrationNumber,
+          billingName: addressBilling.Company || `${addressBilling.FirstName || ''} ${addressBilling.LastName || ''}`.trim(),
+          billingStreet: addressBilling.Address1,
+          billingCity: addressBilling.City,
+        },
+        items,
+        shippingPrice: parseFloat(orderData.ShippingFee) || 0,
+      });
+
+      this.logger.log(`✅ Order processed in Odoo. Sale Order ID: ${result.saleOrderId}`);
+
+      // Paso 4: Agregar jobs a la cola para sincronizar stock a otros marketplaces
       for (const item of items) {
-        if (item?.Sku) {
-          const sku = item.Sku;
-          const quantity = 1; // Falabella generalmente envía 1 unidad por OrderItem
-
-          this.logger.log(`\n📦 Processing item: ${item.Name} (SKU: ${sku})`);
-
-          try {
-            // Paso 2: Buscar producto en Odoo por SKU
-            this.logger.log(`🔍 Paso 2: Searching product in Odoo for SKU: ${sku}`);
-            const product = await this.odooService.searchProductBySku(sku);
-            this.logger.log(`✅ Product found: ID=${product.id}, Stock=${product.qty_available}`);
-
-            // Paso 3: Obtener stock.quant del producto
-            this.logger.log(`🔍 Paso 3: Getting stock quant for product ${product.id}`);
-            const stockQuant = await this.odooService.getStockQuant(product.id, 8);
-            this.logger.log(`✅ Stock Quant found: ID=${stockQuant.id}, Quantity=${stockQuant.quantity}`);
-
-            // Paso 4: Reducir stock en Odoo (ejecuta los 4 pasos internos)
-            this.logger.log(`📉 Paso 4: Reducing stock for SKU: ${sku}, Quantity: ${quantity}`);
-            const result = await this.odooService.reduceStock(sku, quantity, orderId);
-            this.logger.log(`✅ Stock reduced: ${result.previousStock} → ${result.newStock}`);
-
-            processedItems.push({
-              sku,
-              orderItemId: item.OrderItemId,
-              name: item.Name,
-              previousStock: result.previousStock,
-              newStock: result.newStock,
-              success: true,
-            });
-          } catch (itemError) {
-            this.logger.error(`❌ Error processing SKU ${sku}: ${itemError.message}`);
-            processedItems.push({
-              sku,
-              orderItemId: item.OrderItemId,
-              name: item.Name,
-              success: false,
-              error: itemError.message,
-            });
-          }
+        const stockUpdate = result.stockUpdates.find((s: any) => s.sku === item.sku);
+        if (stockUpdate) {
+          await this.stockQueue.add('reduce-stock', {
+            orderId,
+            sku: item.sku,
+            quantity: item.quantity,
+            source: 'falabella',
+            newStock: stockUpdate.newStock,
+          });
+          this.logger.log(`📤 Stock sync queued for SKU: ${item.sku}, newStock: ${stockUpdate.newStock}`);
         }
       }
 
@@ -123,20 +140,26 @@ export class FalabellaController {
         action: 'webhook_processing_completed',
         status: 'success',
         request: { orderId, itemCount: items.length },
-        response: { processedItems },
+        response: {
+          saleOrderId: result.saleOrderId,
+          partnerId: result.partnerId,
+          stockUpdates: result.stockUpdates,
+        },
         orderId,
       });
+
+      this.logger.log(`✅ Orden ${orderId} procesada exitosamente`);
 
       return {
         success: true,
         message: 'Order processed successfully',
         orderId: orderId,
-        itemsProcessed: processedItems.length,
-        items: processedItems,
+        saleOrderId: result.saleOrderId,
+        itemsProcessed: items.length,
       };
     } catch (error) {
       this.logger.error(`❌ Error processing webhook: ${error.message}`);
-      
+
       await this.logsService.create({
         service: 'falabella',
         action: 'webhook_processing_error',
