@@ -9,6 +9,7 @@ import { OdooModule } from './odoo/odoo.module';
 import { QueuesModule } from './queues/queues.module';
 import { RipleyModule } from './ripley/ripley.module';
 import { ParisModule } from './paris/paris.module';
+import { WalmartModule } from './walmart/walmart.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { ParisModule } from './paris/paris.module';
     QueuesModule,
     RipleyModule,
     ParisModule,
+    WalmartModule,
   ],
   controllers: [AppController],
   providers: [],

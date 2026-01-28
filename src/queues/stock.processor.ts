@@ -5,6 +5,7 @@ import { OdooService } from '../odoo/odoo.service';
 import { FalabellaService } from '../falabella/falabella.service';
 import { RipleyService } from '../ripley/ripley.service';
 import { ParisService } from '../paris/paris.service';
+import { WalmartService } from '../walmart/walmart.service';
 import { LogsService } from '../logs/logs.service';
 
 // Interfaces para futuros servicios de marketplace
@@ -13,7 +14,7 @@ interface MarketplaceService {
 }
 
 // Registro de marketplaces disponibles
-const AVAILABLE_MARKETPLACES = ['falabella', 'ripley', 'paris'] as const;
+const AVAILABLE_MARKETPLACES = ['falabella', 'ripley', 'paris', 'walmart'] as const;
 type MarketplaceName = typeof AVAILABLE_MARKETPLACES[number];
 
 @Processor('stock-updates')
@@ -28,12 +29,14 @@ export class StockProcessor {
     private readonly falabellaService: FalabellaService,
     @Inject(forwardRef(() => RipleyService)) private readonly ripleyService: RipleyService,
     @Inject(forwardRef(() => ParisService)) private readonly parisService: ParisService,
+    @Inject(forwardRef(() => WalmartService)) private readonly walmartService: WalmartService,
     private readonly logsService: LogsService,
   ) {
     this.marketplaceServices = new Map();
     this.marketplaceServices.set('falabella', this.falabellaService);
     this.marketplaceServices.set('ripley', this.ripleyService);
     this.marketplaceServices.set('paris', this.parisService);
+    this.marketplaceServices.set('walmart', this.walmartService);
   }
 
   /**

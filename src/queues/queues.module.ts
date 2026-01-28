@@ -5,6 +5,7 @@ import { OdooModule } from '../odoo/odoo.module';
 import { FalabellaModule } from '../falabella/falabella.module';
 import { RipleyModule } from '../ripley/ripley.module';
 import { ParisModule } from '../paris/paris.module';
+import { WalmartModule } from '../walmart/walmart.module';
 import { LogsModule } from '../logs/logs.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { LogsModule } from '../logs/logs.module';
     FalabellaModule,
     RipleyModule,
     ParisModule,
+    WalmartModule,
     LogsModule,
   ],
   providers: [StockProcessor],
