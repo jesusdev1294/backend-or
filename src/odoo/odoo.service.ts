@@ -29,7 +29,7 @@ export class OdooService {
     return {
       db: this.configService.get('ODOO_DB') || 'hyperpc3',
       uid: parseInt(this.configService.get('ODOO_UID') || '5'),
-      password: this.configService.get('ODOO_API_KEY') || '8344ec0a7f47aa5288aa92f3573584decd83f9c2',
+      password: this.configService.get('ODOO_API_KEY'),
     };
   }
 

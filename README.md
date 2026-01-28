@@ -188,11 +188,59 @@ Ver `.env.example` para el template completo. Necesitas configurar:
 - ✅ Falabella implementado y funcionando
 - ✅ Ripley implementado y funcionando
 - ✅ Paris implementado y funcionando
+- ✅ Walmart Chile implementado y validado
 - ✅ Odoo integrado (ERP)
 - ✅ Sincronización multi-marketplace
 - ✅ Sistema de colas (Bull + Redis)
 - ✅ Logs en MongoDB
 - ✅ Deploy en Railway
+
+## 🧪 Validación de APIs
+
+### Walmart Chile Marketplace API ✅
+
+Se realizaron pruebas exhaustivas de los endpoints principales de Walmart Chile según documentación oficial.
+
+#### Autenticación OAuth 2.0
+- **Endpoint**: `POST https://marketplace.walmartapis.com/v3/token`
+- **Método**: Client Credentials con Basic Auth
+- **Duración del token**: 15 minutos (900 segundos)
+- **Status**: ✅ Funcionando correctamente
+
+#### Consulta de Inventario
+- **Endpoint**: `GET /v3/inventory?sku={SKU}`
+- **Formato de respuesta**:
+  ```json
+  {
+    "sku": "SKU_EJEMPLO",
+    "quantity": {
+      "unit": "EACH",
+      "amount": 20
+    }
+  }
+  ```
+- **Status**: ✅ Validado con SKU de prueba
+
+#### Consulta de Órdenes
+- **Endpoint**: `GET /v3/orders?createdStartDate={date}&limit={limit}`
+- **Parámetro requerido**: `createdStartDate` en formato ISO 8601
+- **Status**: ✅ Funcionando correctamente
+
+#### Headers Requeridos (Walmart CL)
+Todos los endpoints autenticados requieren:
+- `WM_SEC.ACCESS_TOKEN`: Token OAuth obtenido
+- `WM_MARKET`: `cl` (identifica mercado Chile)
+- `WM_SVC.NAME`: Nombre del servicio integrador
+- `WM_QOS.CORRELATION_ID`: UUID único por request
+- `Accept`: `application/json`
+- `Content-Type`: `application/json`
+
+#### Fix Implementado
+Se corrigió el header de autenticación en `walmart.service.ts`:
+- ❌ **Antes**: `Authorization: Bearer ${token}`
+- ✅ **Ahora**: `WM_SEC.ACCESS_TOKEN: ${token}`
+
+**Referencia**: Walmart CL Marketplace Partners API Documentation
 
 ---
 
